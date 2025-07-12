@@ -135,39 +135,26 @@ jobs:
         ansible --version
 
   # 9) Build dynamic inventory (wait until IP != empty)
+   # 7. Prepare Ansible Inventory
   - task: Bash@3
-    displayName: "Prepare Ansible inventory"
-    env:
-      ARM_CLIENT_ID:        $(ARM_CLIENT_ID)
-      ARM_CLIENT_SECRET:    $(ARM_CLIENT_SECRET)
-      ARM_SUBSCRIPTION_ID:  $(ARM_SUBSCRIPTION_ID)
-      ARM_TENANT_ID:        $(ARM_TENANT_ID)
+    displayName: "Prepare Ansible Inventory"
     inputs:
       targetType: inline
       script: |
         cd $(terraform_folder)
-
-# Extract public IP once
         VM_PUBLIC_IP=$(terraform output -raw vm_public_ip)
-        echo "✅ VM public IP: $VM_PUBLIC_IP"
 
         mkdir -p $(Build.SourcesDirectory)/$(ansible_folder)
-        INVENTORY=$(Build.SourcesDirectory)/$(ansible_folder)/inventory
-# Generate inventory file
-        cat > $INVENTORY <<EOF
-        [linux_servers]
-        demo-vm ansible_host=$VM_PUBLIC_IP ansible_user=azureuser ansible_ssh_private_key_file=~/.ssh/id_rsa ansible_python_interpreter=/usr/bin/python3
-        EOF
+        INVENTORY="$(Build.SourcesDirectory)/$(ansible_folder)/inventory"
 
-        cat > $(Build.SourcesDirectory)/$(ansible_folder)/ansible.cfg <<EOF
+        echo "[linux_servers]" > $INVENTORY
+        echo "demo-vm ansible_host=$VM_PUBLIC_IP ansible_user=azureuser ansible_ssh_private_key_file=~/.ssh/id_rsa ansible_python_interpreter=/usr/bin/python3" >> $INVENTORY
+
+        cat > $(Build.SourcesDirectory)/$(ansible_folder)/ansible.cfg << EOF
         [defaults]
         host_key_checking = False
-        EOF
+        EOF  
 
-        echo "Inventory created:"
-        cat $INVENTORY
-
-  # 10) Run Ansible playbook
   - task: Bash@3
     displayName: "Run Ansible playbook"
     inputs:
