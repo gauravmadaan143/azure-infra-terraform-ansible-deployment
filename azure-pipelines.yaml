@@ -110,8 +110,8 @@ jobs:
   - task: DownloadSecureFile@1
     name: sshKey
     inputs:
-      secureFile: 'id_rsa_azure'   # ← secure‑file name
-
+      secureFile: 'id_rsa_azure'   
+      
   # 7) Install key under ~/.ssh
   - task: Bash@3
     displayName: "Install SSH key"
@@ -147,22 +147,13 @@ jobs:
       script: |
         cd $(terraform_folder)
 
-        # Retry up to 10 × to get public IP (sleep 6 s)
-        for i in {1..10}; do
-          VM_PUBLIC_IP=$(terraform output -raw vm_public_ip 2>/dev/null || true)
-          if [[ -n "$VM_PUBLIC_IP" ]]; then break; fi
-          echo "⏳ Waiting for public IP ($i/10)…"; sleep 6
-        done
-
-        if [[ -z "$VM_PUBLIC_IP" ]]; then
-          echo "❌ ERROR: VM public IP not found."
-          exit 1
-        fi
+# Extract public IP once
+        VM_PUBLIC_IP=$(terraform output -raw vm_public_ip)
         echo "✅ VM public IP: $VM_PUBLIC_IP"
 
         mkdir -p $(Build.SourcesDirectory)/$(ansible_folder)
         INVENTORY=$(Build.SourcesDirectory)/$(ansible_folder)/inventory
-
+# Generate inventory file
         cat > $INVENTORY <<EOF
         [linux_servers]
         demo-vm ansible_host=$VM_PUBLIC_IP ansible_user=azureuser ansible_ssh_private_key_file=~/.ssh/id_rsa ansible_python_interpreter=/usr/bin/python3
