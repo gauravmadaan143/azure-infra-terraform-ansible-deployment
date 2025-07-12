@@ -1,0 +1,187 @@
+# ───────────────────────────────────────────────────────────────
+#  Azure DevOps – Terraform + Ansible end‑to‑end pipeline
+#  Requirements in Azure DevOps:
+#    1. Secure File  : id_rsa_azure   (PEM private key, no passphrase)
+#    2. Variable Group: Terraform-SP-Creds
+#         ├─ ARM_CLIENT_ID         (secret)
+#         ├─ ARM_CLIENT_SECRET     (secret)
+#         ├─ ARM_SUBSCRIPTION_ID
+#         ├─ ARM_TENANT_ID
+#         └─ ssh_public_key        (the *public* key text, non‑secret)
+# ───────────────────────────────────────────────────────────────
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest         # Microsoft‑hosted agent
+
+# ----------------- Pipeline Variables -----------------
+variables:
+  - group: Terraform-SP-Creds
+
+  - name: terraform_folder       # path in repo
+    value: terraform
+
+  - name: ansible_folder         # path in repo
+    value: ansible
+
+  - name: location               # Azure region
+    value: westeurope
+
+  - name: vm_name                # VM name
+    value: demo-vm
+
+# ======================================================
+#  Single Job
+# ======================================================
+jobs:
+- job: deploy
+  displayName: "Provision infra & configure VM"
+  steps:
+
+  # 1) Checkout repository
+  - checkout: self
+
+  # 2) Install Terraform CLI
+  - task: TerraformInstaller@1
+    displayName: "Install Terraform 1.6.6"
+    inputs:
+      terraformVersion: 1.6.6
+
+  # 3) Terraform INIT
+  - task: Bash@3
+    displayName: "Terraform init"
+    env:                                     # ← SP creds here
+      ARM_CLIENT_ID:        $(ARM_CLIENT_ID)
+      ARM_CLIENT_SECRET:    $(ARM_CLIENT_SECRET)
+      ARM_SUBSCRIPTION_ID:  $(ARM_SUBSCRIPTION_ID)
+      ARM_TENANT_ID:        $(ARM_TENANT_ID)
+    inputs:
+      targetType: inline
+      script: |
+        cd $(terraform_folder)
+        terraform init -input=false
+
+  # 4) Terraform PLAN (visible)
+  - task: Bash@3
+    displayName: "Terraform plan"
+    env:
+      ARM_CLIENT_ID:        $(ARM_CLIENT_ID)
+      ARM_CLIENT_SECRET:    $(ARM_CLIENT_SECRET)
+      ARM_SUBSCRIPTION_ID:  $(ARM_SUBSCRIPTION_ID)
+      ARM_TENANT_ID:        $(ARM_TENANT_ID)
+    inputs:
+      targetType: inline
+      script: |
+        cd $(terraform_folder)
+        terraform plan \
+          -var="location=$(location)" \
+          -var="vm_name=$(vm_name)" \
+          -var="ssh_public_key=$(ssh_public_key)" \
+          -var="client_id=$(ARM_CLIENT_ID)" \
+          -var="client_secret=$(ARM_CLIENT_SECRET)" \
+          -var="subscription_id=$(ARM_SUBSCRIPTION_ID)" \
+          -var="tenant_id=$(ARM_TENANT_ID)"
+
+  # 5) Terraform APPLY (auto‑approve)
+  - task: Bash@3
+    displayName: "Terraform apply"
+    env:
+      ARM_CLIENT_ID:        $(ARM_CLIENT_ID)
+      ARM_CLIENT_SECRET:    $(ARM_CLIENT_SECRET)
+      ARM_SUBSCRIPTION_ID:  $(ARM_SUBSCRIPTION_ID)
+      ARM_TENANT_ID:        $(ARM_TENANT_ID)
+    inputs:
+      targetType: inline
+      script: |
+        cd $(terraform_folder)
+        terraform apply -auto-approve \
+          -var="location=$(location)" \
+          -var="vm_name=$(vm_name)" \
+          -var="ssh_public_key=$(ssh_public_key)" \
+          -var="client_id=$(ARM_CLIENT_ID)" \
+          -var="client_secret=$(ARM_CLIENT_SECRET)" \
+          -var="subscription_id=$(ARM_SUBSCRIPTION_ID)" \
+          -var="tenant_id=$(ARM_TENANT_ID)"
+
+  # 6) Download Secure‑File private key
+  - task: DownloadSecureFile@1
+    name: sshKey
+    inputs:
+      secureFile: 'id_rsa_azure'   # ← secure‑file name
+
+  # 7) Install key under ~/.ssh
+  - task: Bash@3
+    displayName: "Install SSH key"
+    inputs:
+      targetType: inline
+      script: |
+        mkdir -p ~/.ssh
+        cp $(sshKey.secureFilePath) ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        echo "✅ SSH key installed."
+
+  # 8) Install latest stable Ansible via pip
+  - task: Bash@3
+    displayName: "Install Ansible"
+    inputs:
+      targetType: inline
+      script: |
+        python3 -m pip install --quiet --upgrade pip
+        python3 -m pip install --quiet --user ansible==8.7.0
+        export PATH="$HOME/.local/bin:$PATH"
+        ansible --version
+
+  # 9) Build dynamic inventory (wait until IP != empty)
+  - task: Bash@3
+    displayName: "Prepare Ansible inventory"
+    env:
+      ARM_CLIENT_ID:        $(ARM_CLIENT_ID)
+      ARM_CLIENT_SECRET:    $(ARM_CLIENT_SECRET)
+      ARM_SUBSCRIPTION_ID:  $(ARM_SUBSCRIPTION_ID)
+      ARM_TENANT_ID:        $(ARM_TENANT_ID)
+    inputs:
+      targetType: inline
+      script: |
+        cd $(terraform_folder)
+
+        # Retry up to 10 × to get public IP (sleep 6 s)
+        for i in {1..10}; do
+          VM_PUBLIC_IP=$(terraform output -raw vm_public_ip 2>/dev/null || true)
+          if [[ -n "$VM_PUBLIC_IP" ]]; then break; fi
+          echo "⏳ Waiting for public IP ($i/10)…"; sleep 6
+        done
+
+        if [[ -z "$VM_PUBLIC_IP" ]]; then
+          echo "❌ ERROR: VM public IP not found."
+          exit 1
+        fi
+        echo "✅ VM public IP: $VM_PUBLIC_IP"
+
+        mkdir -p $(Build.SourcesDirectory)/$(ansible_folder)
+        INVENTORY=$(Build.SourcesDirectory)/$(ansible_folder)/inventory
+
+        cat > $INVENTORY <<EOF
+        [linux_servers]
+        demo-vm ansible_host=$VM_PUBLIC_IP ansible_user=azureuser ansible_ssh_private_key_file=~/.ssh/id_rsa ansible_python_interpreter=/usr/bin/python3
+        EOF
+
+        cat > $(Build.SourcesDirectory)/$(ansible_folder)/ansible.cfg <<EOF
+        [defaults]
+        host_key_checking = False
+        EOF
+
+        echo "Inventory created:"
+        cat $INVENTORY
+
+  # 10) Run Ansible playbook
+  - task: Bash@3
+    displayName: "Run Ansible playbook"
+    inputs:
+      targetType: inline
+      script: |
+        cd $(Build.SourcesDirectory)/$(ansible_folder)
+        export PATH="$HOME/.local/bin:$PATH"
+        ansible-playbook -i inventory playbook.yml

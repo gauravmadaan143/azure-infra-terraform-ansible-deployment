@@ -1,0 +1,52 @@
+---
+- name: Configure RHEL Azure VM and install NGINX
+  hosts: linux_servers
+  become: yes
+  tasks:
+
+    - name: Ensure firewalld is installed and running
+      yum:
+        name: firewalld
+        state: present
+      notify:
+        - start firewalld
+
+    - name: Open HTTP port in firewalld permanently
+      firewalld:
+        service: http
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Download epel-release RPM directly (Azure RHEL friendly)
+      get_url:
+        url: https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+        dest: /tmp/epel-release-latest-8.noarch.rpm
+
+    - name: Install epel-release rpm without GPG check (one-time)
+      yum:
+        name: /tmp/epel-release-latest-8.noarch.rpm
+        state: present
+        disable_gpg_check: yes
+
+    - name: Clean yum cache
+      command: yum clean all
+
+    - name: Install nginx from EPEL
+      yum:
+        name: nginx
+        state: present
+
+    - name: Enable and start nginx
+      systemd:
+        name: nginx
+        enabled: yes
+        state: started
+
+  handlers:
+    - name: start firewalld
+      systemd:
+        name: firewalld
+        state: started
+        enabled: yes
+
