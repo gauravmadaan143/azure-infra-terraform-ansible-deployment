@@ -185,3 +185,12 @@ jobs:
         cd $(Build.SourcesDirectory)/$(ansible_folder)
         export PATH="$HOME/.local/bin:$PATH"
         ansible-playbook -i inventory playbook.yml
+
+  - task: Bash@3
+    displayName: 'Terraform Destroy'
+    inputs:
+      targetType: 'inline'
+      script: |
+        terraform init
+        terraform plan -destroy -out=tfplan
+        terraform destroy -auto-approve
