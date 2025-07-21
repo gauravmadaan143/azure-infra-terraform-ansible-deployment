@@ -188,9 +188,15 @@ jobs:
 
   - task: Bash@3
     displayName: 'Terraform Destroy'
+    env:
+     ARM_CLIENT_ID:        $(ARM_CLIENT_ID)
+     ARM_CLIENT_SECRET:    $(ARM_CLIENT_SECRET)
+     ARM_SUBSCRIPTION_ID:  $(ARM_SUBSCRIPTION_ID)
+     ARM_TENANT_ID:        $(ARM_TENANT_ID)
     inputs:
-      targetType: 'inline'
-      script: |
-        terraform init
-        terraform plan -destroy -out=tfplan
-        terraform destroy -auto-approve
+     targetType: 'inline'
+     script: |
+      cd $(terraform_folder)
+      terraform init -input=false
+      terraform plan -destroy -out=tfplan -input=false
+      terraform destroy -auto-approve -input=false
